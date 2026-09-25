@@ -1,111 +1,108 @@
 #include <opencv2/opencv.hpp>
+#include <vector>
 #include <iostream>
-#include <random>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
-cv::VideoCapture cap("/Users/muravei/projects/RobotFightCPP/4.mp4");
-cv::Mat frame, fgmask, dst, blur_frame, kernel, labels, stats, centroids, output, crop_frame;
-cv::Ptr<cv::BackgroundSubtractorKNN> subsctractorKNN = cv::createBackgroundSubtractorKNN(100, 500.0, false);
-cv::KalmanFilter kf(4,2,0);
-float dt = 1.0f;
-
-struct Robot {
-    float x;
-    float y;
+struct CameraBuffer {
+    cv::Mat frame;
+    std::mutex mtx;
+    bool hasNew = false;
 };
 
-Robot robot1{0, 0};
-Robot robot2{0, 0};
+void cameraThread(int index, CameraBuffer* buf, std::atomic<bool>* stop) {
+    cv::VideoCapture cap;
+#ifdef _WIN32
+    cap.open(index, cv::CAP_DSHOW);
+#else
+    cap.open(index);
+#endif
+    if (!cap.isOpened()) {
+        std::cerr << "Камера " << index << " не открылась\n";
+        return;
+    }
 
-void addRobot(int index) {
-    std::mt19937 rng(42);
-    std::uniform_int_distribution<int> dist(50, 255);
+    cap.set(cv::CAP_PROP_FPS, 30);
+    cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M','J','P','G'));
+    cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
 
-    int area = stats.at<int>(index, cv::CC_STAT_AREA);
-    if (area < 500 || area > 4000) return;
+    cv::Mat local;
+    while (!stop->load()) {
+        if (!cap.read(local) || local.empty()) continue;
 
-    cv::Vec3b color(
-        static_cast<uchar>(dist(rng)),
-        static_cast<uchar>(dist(rng)),
-        static_cast<uchar>(dist(rng))
-    );
-    output.setTo(color, labels == index);
+        cv::flip(local, local, 0);
 
-    int x = stats.at<int>(index, cv::CC_STAT_LEFT);
-    int y = stats.at<int>(index, cv::CC_STAT_TOP);
-    int w = stats.at<int>(index, cv::CC_STAT_WIDTH);
-    int h = stats.at<int>(index, cv::CC_STAT_HEIGHT);
-
-    cv::rectangle(output, cv::Rect(x, y, w, h), cv::Scalar(255, 255, 255), 1);
-
-    double cx = centroids.at<double>(index, 0);
-    double cy = centroids.at<double>(index, 1);
-    cv::circle(output, cv::Point(cvRound(cx), cvRound(cy)), 3, cv::Scalar(0, 0, 255), -1);
-
-    if (index == 1) {
-        robot1.x = static_cast<int>(cx);
-        robot1.y = static_cast<int>(cy);
-    } else {
-        robot2.x = static_cast<int>(cx);
-        robot2.y = static_cast<int>(cy);
+        {
+            std::lock_guard<std::mutex> lock(buf->mtx);
+            cv::swap(buf->frame, local);
+            buf->hasNew = true;
+        }
     }
 }
 
-int main() {
-    kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-    kf.transitionMatrix = (cv::Mat_<float>(4,4) << 
-        1, 0, dt, 0,
-        0, 1, 0, dt,
-        0, 0, 1, 0,
-        0, 0, 0, 1);
-    
-        cv::setIdentity(kf.measurementMatrix);
-        cv::setIdentity(kf.processNoiseCov, cv::Scalar::all(1e-2));
-        cv::setIdentity(kf.measurementNoiseCov, cv::Scalar::all(1e-1));
+cv::Mat buildGrid(std::vector<CameraBuffer>& buffers, int rows, int cols, int cellW, int cellH, int gap = 0)
+{
+    const int totalW = cols * cellW + (cols - 1) * gap;
+    const int totalH = rows * cellH + (rows - 1) * gap;
 
-         kf.statePost = (cv::Mat_<float>(4, 1) << 0, 0, 0, 0);
+    cv::Mat canvas(totalH, totalW, CV_8UC3, cv::Scalar(0, 0, 0));
 
-        cv::Mat measurement(2, 1, CV_32F); // Входное измерение (x, y)
-        cv::Mat prediction;                // Выход: предсказание
-        cv::Mat corrected; 
+    const int numCameras = static_cast<int>(buffers.size());
 
-    while (true) {
-        cap >> frame;
-        if (frame.empty()) break;
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            const int idx = r * cols + c;
+            if (idx >= numCameras) continue;
 
-        cv::Rect roi(330, 90, 600, 600);
+            cv::Mat frame;
+            {
+                std::lock_guard<std::mutex> lock(buffers[idx].mtx);
+                if (buffers[idx].frame.empty()) continue;
+                frame = buffers[idx].frame.clone();   // независимая копия — нет мерцания
+                buffers[idx].hasNew = false;
+            }
 
-        crop_frame = frame(roi);
+            cv::Mat resized;
+            if (frame.size() != cv::Size(cellW, cellH)) {
+                cv::resize(frame, resized, cv::Size(cellW, cellH), 0, 0, cv::INTER_LINEAR);
+            } else {
+                resized = frame;
+            }
 
-        cv::GaussianBlur(crop_frame, blur_frame, cv::Size(7, 7), 0);
-        subsctractorKNN->apply(blur_frame, fgmask);
-        cv::dilate(fgmask, dst, kernel);
-
-        int num_labels = cv::connectedComponentsWithStats(
-            dst, labels, stats, centroids, 8, CV_32S);
-
-        output = cv::Mat::zeros(crop_frame.size(), CV_8UC3);
-
-        for (int i = 1; i < num_labels; i++) {
-            addRobot(i);
+            const int x = c * (cellW + gap);
+            const int y = r * (cellH + gap);
+            resized.copyTo(canvas(cv::Rect(x, y, cellW, cellH)));
         }
-        measurement.at<float>(0) = robot1.x;
-        measurement.at<float>(1) = robot1.y;
-
-        prediction = kf.predict();
-
-        corrected = kf.correct(measurement);
-        cv::circle(crop_frame, cv::Point(corrected.at<float>(0,0),corrected.at<float>(1,0)),5 , cv::Scalar(255, 255, 255), -1);
- 
-
-        if (!output.empty()) {
-            cv::imshow("Components", output);
-            cv::imshow("Comp3r2onents", crop_frame);
-
-        }
-
-        if (cv::waitKey(30) == 27) break;
     }
 
-    cap.release();
-    cv::destroyAllWindows();
+    return canvas;
+}
+
+int main() {
+    const int numCameras = 3;
+    std::vector<CameraBuffer> buffers(numCameras);
+    std::vector<std::thread> threads;
+    std::atomic<bool> stop{false};
+
+    for (int i = 0; i < numCameras; i++)
+        threads.emplace_back(cameraThread, i, &buffers[i], &stop);
+
+    int gridRows = 3;
+    int gridCols = 1;
+
+    const int cellW = 1920;
+    const int cellH = 1080;
+    const int gap   = 0;
+
+    while (true) {
+        cv::Mat grid = buildGrid(buffers, gridRows, gridCols, cellW, cellH, gap);
+        
+        cv::imshow("Grid", grid);
+        if (cv::waitKey(1) == 27) break;
+    }
+
+    stop = true;
+    for (auto& t : threads) t.join();
+    return 0;
 }
