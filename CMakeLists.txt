@@ -18,6 +18,7 @@ add_executable(ASRG
     src/main.cpp
     src/camera_thread.cpp
     src/grid_builder.cpp
+    src/motion_detection.cpp
 )
 
 target_include_directories(ASRG PRIVATE include)
