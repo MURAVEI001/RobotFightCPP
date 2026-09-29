@@ -21,7 +21,7 @@ void cameraThread(int index, CameraBuffer* buf, std::atomic<bool>* stop) {
     cv::Mat local;
     while (!stop->load(std::memory_order_relaxed)) {
         if (!cap.read(local) || local.empty()) continue;
-        cv::flip(local, local, 0);
+        // cv::flip(local, local, 0);
         buf->setFrame(local);
     }
 }
