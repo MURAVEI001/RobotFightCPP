@@ -1,92 +1,47 @@
 #include <opencv2/opencv.hpp>
-#include <opencv2/objdetect/aruco_detector.hpp>
-#include <vector>
-#include <thread>
 #include <atomic>
-#include "camera_buffer.hpp"
-#include "camera_thread.hpp"
-#include "grid_builder.hpp"
+#include <thread>
+#include <vector>
+
+#include "config.hpp"
+#include "video_source.hpp"
 #include "motion_detection.hpp"
+#include "aruco_detection.hpp"
+#include "visualize.hpp"
 
 int main() {
-    cv::VideoCapture cap("/Users/muravei/projects/RobotFightCPP/4.mp4");
-    cv::Mat frame, cropFrame, stats, centroids, morphFrame;
-    std::vector<int> markerIds;
-    std::vector<std::vector<cv::Point2f>> markerCorners, rejected;
-    cv::Rect roi(330, 90, 600, 600);
-    MotionDetector detectorMotion;
-    const int numCameras = 1;
-    std::vector<CameraBuffer> buffers(numCameras);
-    std::vector<std::thread> threads;
-    std::atomic<bool> stop{false};
+    auto cap = openVideo(cfg::g.video.path);
+    if (!cap.isOpened()) return -1;
 
-    cv::aruco::DetectorParameters detectorParams = cv::aruco::DetectorParameters();
-    cv::aruco::Dictionary dictAruco = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_4X4_250);
-    cv::aruco::ArucoDetector detector(dictAruco, detectorParams);
+    const cv::Rect roi(cfg::g.geometry.roiX,
+                       cfg::g.geometry.roiY,
+                       cfg::g.geometry.roiW,
+                       cfg::g.geometry.roiH);
 
-    // for (int i = 0; i < numCameras; ++i)
-    //     threads.emplace_back(cameraThread, i, &buffers[i], &stop);
+    MotionDetector     motion;
+    ArucoMarkerDetector markerDetector(cfg::g.markers.arucoDictId);
 
-    // GridConfig cfg{1 , 1, 1920, 1080, 0};
+    cv::Mat frame;
+    while (cap.read(frame)) {
+        cv::Mat crop = frame(roi);
 
-    int area, numLabels, cx, cy;
+        // 1. Маркеры
+        auto markers = markerDetector.detect(crop);
 
-    while (true) {
-//      cv::Mat cropFrame = buildGrid(buffers, cfg);
-        cap >> frame;
-        cropFrame = frame(roi);
-        detector.detectMarkers(cropFrame, markerCorners, markerIds, rejected);
+        // 2. Движение
+        cv::Mat morph, stats, centroids;
+        int numLabels = motion.detect(crop, morph, stats, centroids);
 
-        cv::Mat blurred, sharpened;
-cv::GaussianBlur(cropFrame, blurred, cv::Size(0, 0), 5.0);
+        // 3. Отрисовка
+        drawMotionBoxes(crop, stats, numLabels,
+                        cfg::g.motion.minArea, cfg::g.motion.maxArea);
+        drawMarkers(crop, markers, cfg::g.markers.targetMarkerId);
 
-// sharpened = src * (1 + amount) - blurred * amount
-double amount = 1.5; // сила резкости
-cv::addWeighted(cropFrame, 1.0 + amount, blurred, -amount, 0, sharpened);
-
-        numLabels = detectorMotion.detect(cropFrame, morphFrame, stats, centroids);
-        for(int i = 1; i < numLabels; ++i){
-            area = stats.at<int>(i, cv::CC_STAT_AREA);
-            cx = centroids.at<double>(i, 0);
-            cy = centroids.at<double>(i, 1);
-
-            int x = stats.at<int>(i,cv::CC_STAT_LEFT);
-            int y = stats.at<int>(i,cv::CC_STAT_TOP);
-            int w = stats.at<int>(i,cv::CC_STAT_WIDTH);
-            int h = stats.at<int>(i,cv::CC_STAT_HEIGHT);
-
-            if(area <= 500 || area >= 5000){continue;}
-
-            cv::rectangle(cropFrame, cv::Point2i(x,y), cv::Point2i(x+w,y+h),cv::Scalar(0,0,255),3);
-        };
-
-        for (size_t i{}; i < markerIds.size(); ++i) {
-            if (markerIds[i] == 47) {
-                const auto& c = markerCorners[i]; // 4 точки
-                for (int j = 0; j < 4; ++j) {
-                    cv::line(cropFrame, c[j], c[(j + 1) % 4], cv::Scalar(0, 0, 255), 2);
-        }
-            cv::Point2f topLeft = markerCorners[i][1];
-            cv::Point2f topRight = markerCorners[i][0];
-
-            double angleRad = atan2(topRight.y - topLeft.y, topRight.x - topLeft.x);
-            double angleDeg = angleRad * 180.0 / CV_PI;
-
-            cv::putText(cropFrame, std::to_string(markerIds[i]),
-                    c[0], cv::FONT_HERSHEY_SIMPLEX, 0.6,
-                    cv::Scalar(0, 255, 0), 2);
-            cv::putText(cropFrame, std::to_string(angleDeg),
-                    cv::Point2i(50,50), cv::FONT_HERSHEY_SIMPLEX, 0.6,
-                    cv::Scalar(0, 255, 0), 2);
-    }};
-
-        cv::imshow("frame", morphFrame);
-        cv::imshow("frame1", cropFrame);
-
+        // 4. Показ
+        cv::imshow("crop",   crop);
+        cv::imshow("motion", morph);
 
         if (cv::waitKey(1) == 27) break;
     }
-    stop = true;
-    for (auto& t : threads) t.join();
     return 0;
 }
