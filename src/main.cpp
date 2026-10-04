@@ -1,47 +1,44 @@
-#include <opencv2/opencv.hpp>
+#include "FrameReceiver.hpp"
+#include "FrameProcessor.hpp"
+
+#include <cstdio>
+#include <cstdlib>
+#include <csignal>
 #include <atomic>
-#include <thread>
-#include <vector>
 
-#include "config.hpp"
-#include "video_source.hpp"
-#include "motion_detection.hpp"
-#include "aruco_detection.hpp"
-#include "visualize.hpp"
+#include <opencv2/highgui.hpp>
 
-int main() {
-    auto cap = openVideo(cfg::g.video.path);
-    if (!cap.isOpened()) return -1;
+static std::atomic<bool> g_running{true};
 
-    const cv::Rect roi(cfg::g.geometry.roiX,
-                       cfg::g.geometry.roiY,
-                       cfg::g.geometry.roiW,
-                       cfg::g.geometry.roiH);
+static void signalHandler(int) { g_running = false; }
 
-    MotionDetector     motion;
-    ArucoMarkerDetector markerDetector(cfg::g.markers.arucoDictId);
+int main(int argc, char** argv) {
+    uint16_t port = 9000;
+    if (argc > 1) port = static_cast<uint16_t>(std::atoi(argv[1]));
 
-    cv::Mat frame;
-    while (cap.read(frame)) {
-        cv::Mat crop = frame(roi);
+    signal(SIGINT,  signalHandler);
+    signal(SIGTERM, signalHandler);
 
-        // 1. Маркеры
-        auto markers = markerDetector.detect(crop);
+    FrameProcessor processor;
+    FrameReceiver  receiver(port, &processor);
 
-        // 2. Движение
-        cv::Mat morph, stats, centroids;
-        int numLabels = motion.detect(crop, morph, stats, centroids);
-
-        // 3. Отрисовка
-        drawMotionBoxes(crop, stats, numLabels,
-                        cfg::g.motion.minArea, cfg::g.motion.maxArea);
-        drawMarkers(crop, markers, cfg::g.markers.targetMarkerId);
-
-        // 4. Показ
-        cv::imshow("crop",   crop);
-        cv::imshow("motion", morph);
-
-        if (cv::waitKey(1) == 27) break;
+    if (!receiver.start()) {
+        fprintf(stderr, "Не удалось запустить сервер на порту %u\n", port);
+        return 1;
     }
+
+    printf("RobotFightCPP сервер запущен на порту %u.\n", port);
+    printf("Ожидание камер. ESC или q — выход.\n");
+
+    // ВАЖНО: imshow/waitKey должны выполняться в главном потоке (macOS/Cocoa).
+    while (g_running) {
+        if (!processor.renderAndShow(/*tile*/640, 360, /*cols*/2, /*fps*/30)) {
+            break;
+        }
+    }
+
+    receiver.stop();
+    cv::destroyAllWindows();
+    printf("RobotFightCPP завершён.\n");
     return 0;
 }

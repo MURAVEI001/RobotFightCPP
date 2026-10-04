@@ -1,24 +1,22 @@
-cmake_minimum_required(VERSION 3.16)
-project(ASRG CXX)
+cmake_minimum_required(VERSION 3.10)
+project(RobotFightCPP CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(OpenCV REQUIRED)
-
-add_executable(ASRG
-    src/main.cpp
-    src/video_source.cpp
-    src/camera_source.cpp
-    src/camera_thread.cpp
-    src/grid_builder.cpp
-    src/motion_detection.cpp
-    src/aruco_detection.cpp
-    src/visualize.cpp
-)
-
-target_include_directories(ASRG PRIVATE src)
-target_link_libraries(ASRG PRIVATE ${OpenCV_LIBS})
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native")
 
 find_package(Threads REQUIRED)
-target_link_libraries(ASRG PRIVATE Threads::Threads)
+find_package(OpenCV  REQUIRED)
+
+add_executable(RobotFightCPP
+    src/main.cpp
+    src/FrameReceiver.cpp
+    src/FrameProcessor.cpp
+)
+
+target_include_directories(RobotFightCPP PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(RobotFightCPP PRIVATE Threads::Threads ${OpenCV_LIBS})
