@@ -1,26 +1,46 @@
 #include "motion_detection.hpp"
-#include "config.hpp"
 
-MotionDetector::MotionDetector()
-    : mog_(cv::createBackgroundSubtractorMOG2(
-          cfg::g.motion.mogHistory,
-          cfg::g.motion.mogVarThreshold,
-          cfg::g.motion.mogDetectShadows)),
-      kernel_(cv::getStructuringElement(
-          cv::MORPH_RECT,
-          {cfg::g.motion.morphKernel, cfg::g.motion.morphKernel})) {}
+#include <opencv2/opencv.hpp>
 
-int MotionDetector::detect(cv::InputArray src,
-                           cv::OutputArray morphFrame,
-                           cv::OutputArray stats,
-                           cv::OutputArray centroids) {
-    const int k = cfg::g.motion.blurKernel;
-    cv::GaussianBlur(src, blurFrame_, {k, k}, 0);
-    mog_->apply(blurFrame_, mapMotion_);
+int motionDetect(cv::Mat& frame, cv::Mat& labels, cv::Mat& stats, cv::Mat& centroids, cv::Mat& morphFrame){
+    cv::Mat blurFrame, mapMotion;
+    static cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, {9,9});
+    static cv::Ptr<cv::BackgroundSubtractorMOG2> mog2 = cv::createBackgroundSubtractorMOG2(300, 48.0, false);
+    cv::GaussianBlur(frame, blurFrame, {15,15}, 0);
+    mog2->apply(blurFrame, mapMotion, -1);
+    cv::morphologyEx(mapMotion, morphFrame, cv::MORPH_CLOSE, kernel);
+    cv::morphologyEx(morphFrame, morphFrame, cv::MORPH_OPEN, kernel);
+    int numLabels = cv::connectedComponentsWithStats(morphFrame, labels, stats, centroids, 8, CV_32S);
+    return numLabels;
+}
 
-    cv::morphologyEx(mapMotion_, morphFrame, cv::MORPH_CLOSE, kernel_);
-    cv::morphologyEx(morphFrame, morphFrame, cv::MORPH_OPEN,  kernel_);
+void filterStats(int numLabels, cv::Mat& stats, int minArea, int maxArea,
+                 std::vector<int>& keptLabels)
+{
+    keptLabels.clear();
+    for (int i = 1; i < numLabels; ++i) {
+        int area = stats.at<int>(i, cv::CC_STAT_AREA);
+        if (area >= minArea && area <= maxArea)
+            keptLabels.push_back(i);
+    }
+}
 
-    return cv::connectedComponentsWithStats(
-        morphFrame, labels_, stats, centroids, 8, CV_32S);
+void getROI(cv::Mat& frame, cv::Mat& stats, std::vector<int>& keptLabels, std::vector<cv::Mat>& ROI, 
+    std::vector<cv::Point2i>& anchors){
+    for(int index : keptLabels){
+        int x = stats.at<int>(index, cv::CC_STAT_LEFT);
+        int y = stats.at<int>(index, cv::CC_STAT_TOP);
+        int w = stats.at<int>(index, cv::CC_STAT_WIDTH);
+        int h = stats.at<int>(index, cv::CC_STAT_HEIGHT);
+
+        cv::Rect box(x, y, w, h);
+
+        box &= cv::Rect(0, 0, frame.cols, frame.rows);
+        if (box.empty()) continue;
+
+        cv::Mat roi = frame(box);
+        ROI.push_back(roi);
+        anchors.emplace_back(box.x + box.width / 2,
+                            box.y + box.height /2);
+    }   
 }

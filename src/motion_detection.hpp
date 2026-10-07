@@ -1,19 +1,12 @@
 #pragma once
+
 #include <opencv2/opencv.hpp>
 
-class MotionDetector {
-public:
-    MotionDetector();
+int motionDetect(cv::Mat& frame, cv::Mat& labels, cv::Mat& stats, cv::Mat& centroids, 
+                cv::Mat& morphFrame);
 
-    int detect(cv::InputArray src,
-               cv::OutputArray morphFrame,
-               cv::OutputArray stats,
-               cv::OutputArray centroids);
+void filterStats(int numLabels, cv::Mat& stats, int minArea, int maxArea,
+                 std::vector<int>& keptLabels);
 
-private:
-    cv::Ptr<cv::BackgroundSubtractorMOG2> mog_;
-    cv::Mat kernel_;
-    cv::Mat blurFrame_;
-    cv::Mat mapMotion_;
-    cv::Mat labels_;
-};
+void getROI(cv::Mat& frame, cv::Mat& stats, std::vector<int>& keptLabels, 
+                std::vector<cv::Mat>& ROI, std::vector<cv::Point2i>& anchors);

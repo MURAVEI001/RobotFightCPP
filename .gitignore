@@ -1,3 +1,5 @@
 build
 *.mp4
 .vscode
+onnxruntime-osx-arm64-1.30.0
+*.onnx

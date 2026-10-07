@@ -1,21 +1,35 @@
-cmake_minimum_required(VERSION 3.16)
-project(raspiGrid LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.15)
+project(ASRG)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif()
+# Путь к ONNX Runtime (относительно CMakeLists.txt)
+set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/onnxruntime-osx-arm64-1.30.0")
 
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
+# OpenCV через Homebrew
+find_package(OpenCV REQUIRED)
 
-add_executable(raspiGrid
-    src/main.cpp
-    src/raspiGrid.cpp
+include_directories(
+    ${ONNXRUNTIME_ROOT}/include
+    ${OpenCV_INCLUDE_DIRS}
 )
 
-target_include_directories(raspiGrid PRIVATE src ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(raspiGrid PRIVATE ${OpenCV_LIBS} pthread)
+link_directories(${ONNXRUNTIME_ROOT}/lib)
 
-target_compile_options(raspiGrid PRIVATE -Wall -Wextra -Wpedantic)
+add_executable(ASRG
+    src/mainVideo.cpp
+    src/aruco_detection.cpp
+    src/motion_detection.cpp
+    src/yolo_predict.cpp)
+
+target_link_libraries(ASRG
+    onnxruntime
+    ${OpenCV_LIBS}
+)
+
+# Чтобы при запуске находились .dylib из папки onnxruntime
+set_target_properties(ASRG PROPERTIES
+    BUILD_RPATH "${ONNXRUNTIME_ROOT}/lib"
+    INSTALL_RPATH "${ONNXRUNTIME_ROOT}/lib"
+)

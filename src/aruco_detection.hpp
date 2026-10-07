@@ -3,22 +3,11 @@
 #include <opencv2/objdetect/aruco_detector.hpp>
 #include <vector>
 
-struct MarkerResult {
-    std::vector<int> ids;
-    std::vector<std::vector<cv::Point2f>> corners;
-    std::vector<double> anglesDeg;
+struct Marker {
+    const int id = 47;
+    float angle = 0.0f;              
+    bool  found = false;                
+    std::vector<cv::Point2f> corners;       
 };
 
-class ArucoMarkerDetector {
-public:
-    explicit ArucoMarkerDetector(int dictId);
-
-    MarkerResult detect(const cv::Mat& frame);
-    const MarkerResult& last() const { return last_; }
-
-private:
-    cv::aruco::Dictionary         dict_;
-    cv::aruco::DetectorParameters params_;
-    cv::aruco::ArucoDetector      detector_;
-    MarkerResult                  last_;
-};
+float computeMarkerAngle(const std::vector<cv::Point2f>& c);

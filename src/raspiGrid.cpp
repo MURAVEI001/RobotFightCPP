@@ -13,7 +13,7 @@
 
 namespace {
 
-constexpr uint32_t kMagic        = 0x52415350; // "RASP"
+constexpr uint32_t kMagic         = 0x52415350; // "RASP"
 constexpr int      kMaxUdpPayload = 1400;
 constexpr uint32_t kMaxFrameSize  = 32u * 1024u * 1024u; // sanity: 32 MB
 
@@ -39,10 +39,7 @@ RaspiGrid::RaspiGrid(const Config& cfg) : cfg_(cfg) {
         throw std::runtime_error("RaspiGrid: invalid grid geometry");
     }
 
-    grid_ = cv::Mat::zeros(cfg_.rows * cfg_.cell_height,
-                           cfg_.cols * cfg_.cell_width,
-                           CV_8UC3);
-    cell_ready_.assign(static_cast<size_t>(cfg_.rows * cfg_.cols), false);
+    rebuildGrid();
 
     fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (fd_ < 0) {
@@ -81,6 +78,39 @@ RaspiGrid::RaspiGrid(const Config& cfg) : cfg_(cfg) {
 
 RaspiGrid::~RaspiGrid() {
     if (fd_ >= 0) ::close(fd_);
+}
+
+// ---------------------------------------------------------------------------
+void RaspiGrid::rebuildGrid() {
+    const int W = cfg_.cols * cfg_.cell_width;
+    const int H = cfg_.rows * cfg_.cell_height;
+
+    grid_ = cv::Mat::zeros(H, W, CV_8UC3);
+    cell_ready_.assign(static_cast<size_t>(cfg_.cols * cfg_.rows), false);
+
+    // Незавершённые сборки относились к старой раскладке — сбрасываем.
+    for (auto& [cam, fa] : assemblies_) {
+        fa = FrameAssembly{};
+    }
+}
+
+void RaspiGrid::resizeGrid(int cols, int rows) {
+    if (cols <= 0 || rows <= 0) return;
+    if (cols == cfg_.cols && rows == cfg_.rows) return;
+
+    cfg_.cols = cols;
+    cfg_.rows = rows;
+
+    // Чистим маппинг камер, которые теперь вне диапазона.
+    const int n = cellsCount();
+    for (auto it = cfg_.camera_to_cell.begin(); it != cfg_.camera_to_cell.end(); ) {
+        if (it->second < 0 || it->second >= n)
+            it = cfg_.camera_to_cell.erase(it);
+        else
+            ++it;
+    }
+
+    rebuildGrid();
 }
 
 // ---------------------------------------------------------------------------
@@ -135,10 +165,10 @@ void RaspiGrid::handleDatagram(const uint8_t* data, size_t len) {
 
     ++datagrams_received_;
 
-    if (clen == 0 || clen > kMaxUdpPayload)                  return;
-    if (len < sizeof(FrameHeader) + clen)                    return;
-    if (off + clen > total)                                  return;
-    if (total == 0 || total > kMaxFrameSize)                 return;
+    if (clen == 0 || clen > kMaxUdpPayload)   return;
+    if (len < sizeof(FrameHeader) + clen)     return;
+    if (off + clen > total)                   return;
+    if (total == 0 || total > kMaxFrameSize)  return;
 
     auto& fa = assemblies_[camera_id];
 
@@ -156,7 +186,7 @@ void RaspiGrid::handleDatagram(const uint8_t* data, size_t len) {
 
     const size_t chunk_index = off / kMaxUdpPayload;
     if (chunk_index >= fa.chunks_total) return;
-    if (fa.chunk_seen[chunk_index]) return; // дубликат
+    if (fa.chunk_seen[chunk_index])     return; // дубликат
 
     std::memcpy(fa.buffer.data() + off, data + sizeof(FrameHeader), clen);
     fa.chunk_seen[chunk_index] = true;
@@ -186,7 +216,7 @@ void RaspiGrid::processAssembly(uint16_t camera_id, FrameAssembly& fa) {
 // ---------------------------------------------------------------------------
 void RaspiGrid::blitToGrid(uint16_t camera_id, const cv::Mat& img) {
     const int idx = cellIndexFor(camera_id);
-    if (idx < 0 || idx >= cfg_.rows * cfg_.cols) {
+    if (idx < 0 || idx >= cellsCount()) {
         std::cerr << "[RaspiGrid] camera_id " << camera_id
                   << " -> invalid cell " << idx << "\n";
         return;
@@ -218,22 +248,29 @@ int RaspiGrid::cellIndexFor(uint16_t camera_id) const {
     return static_cast<int>(camera_id);
 }
 
-cv::Mat RaspiGrid::cellView(int idx) {
-    if (idx < 0 || idx >= cfg_.rows * cfg_.cols) return cv::Mat{};
-    const int row = idx / cfg_.cols;
-    const int col = idx % cfg_.cols;
+// ---------------------------------------------------------------------------
+cv::Mat RaspiGrid::cellView(int row, int col) {
+    if (row < 0 || row >= cfg_.rows) return {};
+    if (col < 0 || col >= cfg_.cols) return {};
+
     return grid_(cv::Rect(col * cfg_.cell_width,
                           row * cfg_.cell_height,
                           cfg_.cell_width,
                           cfg_.cell_height));
 }
 
+cv::Mat RaspiGrid::cellView(int idx) {
+    if (idx < 0 || idx >= cellsCount()) return {};
+    return cellView(idx / cfg_.cols, idx % cfg_.cols);
+}
+
 cv::Mat RaspiGrid::cellView(uint16_t camera_id) {
     return cellView(cellIndexFor(camera_id));
 }
 
+// ---------------------------------------------------------------------------
 bool RaspiGrid::cellReady(uint16_t camera_id) const {
     const int idx = cellIndexFor(camera_id);
-    if (idx < 0 || idx >= cfg_.rows * cfg_.cols) return false;
+    if (idx < 0 || idx >= cellsCount()) return false;
     return cell_ready_[static_cast<size_t>(idx)];
 }

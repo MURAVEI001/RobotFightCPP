@@ -8,29 +8,16 @@
 #include <string>
 #include <vector>
 
-/*
- * RaspiGrid — приёмник UDP-потоков от нескольких Raspberry Pi
- * и сборка их в единый кадр-матрицу (rows × cols ячеек).
- *
- * Использование:
- *     RaspiGrid grid(cfg);
- *     while (running) {
- *         grid.poll();                // не блокирует, забирает всё, что пришло
- *         cv::Mat& canvas = grid.grid();
- *         // ... работа с canvas ...
- *     }
- *
- * Один поток — никаких мьютексов. Если нужно обрабатывать кадр
- * в другом потоке, синхронизацию пользователь делает сам.
- */
 class RaspiGrid {
 public:
     struct Config {
-        // Геометрия ячейки и всей сетки.
+        // Геометрия одной ячейки.
         int cell_width  = 1920;
         int cell_height = 1080;
-        int cols        = 2;
-        int rows        = 3;
+
+        // Форма сетки — ЛЮБАЯ (не обязательно квадратная).
+        int cols = 4;
+        int rows = 1;
 
         // UDP.
         uint16_t    port         = 5000;
@@ -59,10 +46,27 @@ public:
     cv::Mat&       grid()       { return grid_; }
     const cv::Mat& grid() const { return grid_; }
 
-    // Вид на одну ячейку без копирования данных. idx = row*cols + col.
+    // --- Доступ к ячейкам ---
+
+    // Вид на ячейку по линейному индексу (row * cols + col).
     // Если idx вне диапазона — пустой Mat.
     cv::Mat cellView(int idx);
+
+    // Вид на ячейку по (row, col). Если вне диапазона — пустой Mat.
+    cv::Mat cellView(int row, int col);
+
+    // Вид на ячейку по camera_id (через camera_to_cell).
     cv::Mat cellView(uint16_t camera_id);
+
+    // --- Информация о сетке ---
+
+    int cols()       const { return cfg_.cols; }
+    int rows()       const { return cfg_.rows; }
+    int cellsCount() const { return cfg_.cols * cfg_.rows; }
+
+    // Меняет форму сетки. Пересоздаёт полотно, сбрасывает готовность
+    // ячеек и незавершённые сборки. Ширина/высота ячейки не меняются.
+    void resizeGrid(int cols, int rows);
 
     // Приходил ли когда-нибудь кадр от этой камеры.
     bool cellReady(uint16_t camera_id) const;
@@ -88,6 +92,9 @@ private:
     void processAssembly(uint16_t camera_id, FrameAssembly& fa);
     void blitToGrid(uint16_t camera_id, const cv::Mat& img);
     int  cellIndexFor(uint16_t camera_id) const;
+
+    // Пересоздаёт grid_ и cell_ready_ под текущие cfg_.cols / cfg_.rows.
+    void rebuildGrid();
 
     Config  cfg_;
     int     fd_{-1};

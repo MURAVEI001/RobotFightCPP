@@ -1,24 +1,10 @@
 #include "aruco_detection.hpp"
 
-ArucoMarkerDetector::ArucoMarkerDetector(int dictId)
-    : dict_(cv::aruco::getPredefinedDictionary(dictId)),
-      params_(cv::aruco::DetectorParameters()),
-      detector_(dict_, params_) {}
-
-MarkerResult ArucoMarkerDetector::detect(const cv::Mat& frame) {
-    MarkerResult res;
-    std::vector<std::vector<cv::Point2f>> rejected;
-
-    detector_.detectMarkers(frame, res.corners, res.ids, rejected);
-
-    res.anglesDeg.reserve(res.ids.size());
-    for (const auto& c : res.corners) {
-        const cv::Point2f& tl = c[1];
-        const cv::Point2f& tr = c[0];
-        double rad = std::atan2(tr.y - tl.y, tr.x - tl.x);
-        res.anglesDeg.push_back(rad * 180.0 / CV_PI);
-    }
-
-    last_ = res;
-    return res;
+float computeMarkerAngle(const std::vector<cv::Point2f>& c) {
+    if (c.size() < 4) return 0.0f;
+    float dx = c[3].x - c[0].x;
+    float dy = c[3].y - c[0].y;
+    float angle = std::atan2(dy, dx) * 180.0f / static_cast<float>(CV_PI);
+    if (angle < 0.0f) angle += 360.0f;
+    return angle;
 }
